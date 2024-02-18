@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "foamdapy"
+version = "0.1.0"
+description = ""
+authors = ["TatsuyaKatayama <katayama1227ron@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+numpy = "^1.26.4"
+matplotlib = "^3.8.3"
+tqdm = "^4.66.2"
+pyfoam = "^2023.7"
+scipy = "^1.12.0"
+ray = "^2.9.2"
+jupyter = "^1.0.0"
+pandas = "^2.2.0"
+
+
+[tool.poetry.group.dev.dependencies]
+flake8 = "^7.0.0"
+autopep8 = "^2.0.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
