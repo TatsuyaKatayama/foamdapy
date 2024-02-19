@@ -36,7 +36,7 @@ class OFCase:
         new_path = shutil.copytree(fromDir, toDir, dirs_exist_ok)
         return new_path
 
-    def forcast(self, end_time: str):
+    def forcast(self, end_time: str, writeInterval: str = None):
         # 再計算しない
         time_dir = os.path.join(self.case_dir, end_time)
         if os.path.exists(time_dir):
@@ -52,6 +52,9 @@ class OFCase:
         controlDict.content["startTime"] = 0
         controlDict.content["startFrom"] = "latestTime"
         controlDict.content["endTime"] = end_time
+        if writeInterval is not None:
+            controlDict.content["writeInterval"] = writeInterval
+
         app = controlDict.content["application"]
         controlDict.writeFile()
 

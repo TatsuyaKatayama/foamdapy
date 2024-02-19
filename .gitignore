@@ -2,6 +2,7 @@
 .vscode
 mixerVessel2D
 poetry.lock
+ensim*
 
 
 

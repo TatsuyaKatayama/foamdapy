@@ -175,3 +175,22 @@ def update_of(x_data: np.ndarray, case_path: str, time_name: str, x_names: list)
         # 書き戻し
         Xfile.content["internalField"] = Field(Xa.tolist(), Xc.name)
         Xfile.writeFile()
+
+
+def decimal_normalize(floatOrInt, digit: int = 5):
+    """OpenFOAMの時間ディレクトリのように数値を丸めたテキストで返すex) 3.000-> 3
+
+    Args:
+        floatOrInt (int or float): 変換したい数字
+        digit (int, optional): まるめ桁数. Defaults to 5.
+
+    Returns:
+        str : まるめた数字 ex) 3, 3.1, 3.01
+    """
+    text = str(round(floatOrInt, digit))
+    while True:
+        if ("." in text and text[-1] == "0") or (text[-1] == "."):
+            text = text[:-1]
+            continue
+        break
+    return text
