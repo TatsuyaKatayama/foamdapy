@@ -1,5 +1,7 @@
 import os
 import numpy as np
+import ray
+from ray.experimental import tqdm_ray
 import numpy.matlib
 from PyFoam.Basics.DataStructures import Field
 from PyFoam.RunDictionary.SolutionDirectory import SolutionDirectory
@@ -64,7 +66,7 @@ def cell_distance(case_path: str):
 
 
 def localizemat(cell_distance: np.array, lim=0.1):
-    """cell間距離に応じて正規分布する影響度の。lim以下は影響度0とみなす。
+    """cell間距離に応じて正規分布する影響度。lim以下は影響度0とみなす。
     sigmaの大きさは最大距離の1/10にしてる(仮)。
     将来的にはgaspari&cohn関数がいいはず
 
@@ -101,11 +103,11 @@ def invR_nonZero(localizemat: np.array, idx: int, obs_indexes: np.array):
     limmax = obs_indexes > max_index
     idx = idx % len(localizemat)
     obs_indexes = obs_indexes % len(localizemat)
-    invR = np.identity(len(obs_indexes))
-    invR *= localizemat[idx][obs_indexes].T
-    invR[limmin] = 0.0
-    invR[limmax] = 0.0
-    indx_nozero = invR.max(axis=1) > 0
+    invR_diag = localizemat[idx][obs_indexes].T
+    invR_diag[limmin] = 0.0
+    invR_diag[limmax] = 0.0
+    indx_nozero = invR_diag > 0
+    invR = np.diag(invR_diag[indx_nozero])
     return invR, indx_nozero
 
 
@@ -194,3 +196,70 @@ def decimal_normalize(floatOrInt, digit: int = 5):
             continue
         break
     return text
+
+
+def letkf_update(
+    xf: np.array,
+    H: np.array,
+    y0: np.array,
+    y_indexes: list,
+    lmat: np.array,
+    num_cpus: int,
+):
+    """LETKFによりアンサンブル予報と観測値から解析値(データ同化)を計算する。
+
+    Args:
+        xf (np.array): アンサンブル予報マトリクス(アンサンブル数, 状態変数の数)
+        H (np.array): 観測演算マトリクス（観測点数, 状態変数の数）
+        y0 (np.array): 観測データ(観測点数)
+        y_indexes (list): 状態変数に対応する観測インデックスのリスト
+        lmat (np.array): cell間距離に応じて正規分布する影響度マトリクス
+        num_cpus (int): 並列コア数
+
+    Returns:
+        np.array: データ同化後の解析マトリクス(アンサンブル数, 状態変数の数)
+    """
+    nmem = xf.shape[0]
+    dim_x = xf.shape[1]
+    xfa = np.mean(xf, axis=0)
+    dxf = xf - xfa
+    Hxf = H @ xf.T
+    dyf = Hxf - H @ xfa.reshape(-1, 1)
+
+    @ray.remote
+    def xaj(j, args, bar):
+        y_indexes, dyf, nmem, y0, xf, xfa, dxf, lmat, Hxf = args
+        invR, nzero = invR_nonZero(lmat, j, y_indexes)
+        dyfj = dyf[:, nzero]
+        C = dyfj @ invR
+        w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + C @ dyfj.T)
+        w = np.real(w)
+        v = np.real(v)
+        p_invsq = np.diag(1 / np.sqrt(w))
+        p_inv = np.diag(1 / w)
+        Wa = v @ p_invsq @ v.T
+        Was = v @ p_inv @ v.T
+
+        yHxf_nzero = y0[nzero] - Hxf.mean(axis=1)[nzero]
+        xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf_nzero.T + np.sqrt(nmem - 1) * Wa)
+
+        # for progress bar
+        bar.update.remote(1)
+
+        return xaj
+
+    # for ray put
+    ray.init(num_cpus=num_cpus)
+    argset = [y_indexes, dyf, nmem, y0, xf, xfa, dxf, lmat, Hxf]
+    argset_ids = ray.put(argset)
+
+    # for progress bar
+    remote_tqdm = ray.remote(tqdm_ray.tqdm)
+    bar = remote_tqdm.remote(total=dim_x)
+
+    # parallel progress
+    rayget = ray.get([xaj.remote(j, argset_ids, bar) for j in range(dim_x)])
+    ray.shutdown()
+
+    xa = np.array(rayget)
+    return xa

@@ -1,13 +1,13 @@
 import numpy as np
 import os
 import glob
-import time
 
-import ray
-from ray.experimental import tqdm_ray
+# import time
 
-from .tools import invR_nonZero
 
+from .tools import cell_distance
+from .tools import localizemat
+from .tools import letkf_update
 from .foamer import OFCase
 
 
@@ -24,6 +24,7 @@ class EnSim:
         n_y_scaler: int,
         obs_cells: list,
         obs_case_dir: str,
+        num_cpus: int,
     ):
         self.ensim_dir = ensim_dir
         self.prefix_sim_name = prefix_sim_name
@@ -36,6 +37,7 @@ class EnSim:
         self.y_names = y_names
         self.n_y_scaler = n_y_scaler
         self.obs_cells = np.array(obs_cells)
+        self.num_cpus = num_cpus
 
         self.obs_case = OFCase(obs_case_dir)
         self.y_indexes = self.calc_y_indexes()
@@ -46,6 +48,7 @@ class EnSim:
         self.xf = np.empty([self.dim_emsemble, self.dim_x])
         self.y0 = np.empty(len(self.y_indexes))
         self.H = self.createH()
+        self.mat_d = cell_distance(self.case_path_list[0])
 
     def calc_y_indexes(self):
         y0 = np.matlib.repmat(np.array(self.obs_cells), self.n_y_scaler, 1)
@@ -90,53 +93,12 @@ class EnSim:
         self.y0 = case.getValues(time_name, self.y_names, self.obs_cells)
 
     def letkf_update(self):
-        xf = self.xf  # 20 x 30720
-        H = self.H  # 30720
-        nmem = self.dim_emsemble
-        xfa = np.mean(xf, axis=0)
-        dxf = xf - xfa
-        dyf = (H @ xf.T - H @ xfa.reshape(-1, 1)).T
+        xf = self.xf
+        H = self.H
         y_indexes = self.y_indexes
         y0 = self.y0
-
-        @ray.remote
-        def xaj(j, args, bar):
-            y_indexes, dyf, nmem, y0, H, xf, xfa, dxf = args
-            invR, nzero = invR_nonZero(j, y_indexes)
-            invR = invR[nzero][:, nzero]
-            dyfj = dyf[:, nzero]
-            C = np.dot(dyfj, invR)
-            w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + np.dot(C, dyfj.T))
-            w = np.real(w)
-            v = np.real(v)
-            p_invsq = np.diag(1 / np.sqrt(w))
-            p_inv = np.diag(1 / w)
-            Wa = v @ p_invsq @ v.T
-            Was = v @ p_inv @ v.T
-
-            yHxf = y0[nzero] - (H @ xf.T).mean(axis=1)[nzero]
-            xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf.T + np.sqrt(nmem - 1) * Wa)
-
-            # for progress bar
-            bar.update.remote(1)
-            time.sleep(0.1)
-
-            return xaj
-
-        # for ray put
-        ray.init(num_cpus=4)
-        argset = [y_indexes, dyf, nmem, y0, H, xf, xfa, dxf]
-        argset_ids = ray.put(argset)
-
-        # for progress bar
-        remote_tqdm = ray.remote(tqdm_ray.tqdm)
-        bar = remote_tqdm.remote(total=self.dim_x)
-
-        # parallel progress
-        rayget = ray.get([xaj.remote(j, argset_ids, bar) for j in range(self.dim_x)])
-        ray.shutdown()
-
-        self.xa = np.array(rayget)
+        lmat = localizemat(self.mat_d, 0.1)
+        self.xa = letkf_update(xf, H, y0, y_indexes, lmat, self.num_cpus)
 
     def limit_alpha_in_xa(self):
         xa = self.xa
