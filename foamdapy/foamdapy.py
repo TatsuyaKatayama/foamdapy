@@ -1,4 +1,6 @@
 import numpy as np
+import numpy.matlib as mb
+
 import os
 import glob
 
@@ -51,7 +53,7 @@ class EnSim:
         self.mat_d = cell_distance(self.case_path_list[0])
 
     def calc_y_indexes(self):
-        y0 = np.matlib.repmat(np.array(self.obs_cells), self.n_y_scaler, 1)
+        y0 = mb.repmat(np.array(self.obs_cells), self.n_y_scaler, 1)
         # ベクトル問題
         for i in range(self.n_y_scaler):
             y0[i] += i * self.n_cells

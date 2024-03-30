@@ -1,8 +1,8 @@
 import os
 import numpy as np
+from tqdm import trange
 import ray
 from ray.experimental import tqdm_ray
-import numpy.matlib
 from PyFoam.Basics.DataStructures import Field
 from PyFoam.RunDictionary.SolutionDirectory import SolutionDirectory
 from PyFoam.RunDictionary.ParsedParameterFile import ParsedParameterFile
@@ -223,11 +223,17 @@ def letkf_update(
     dim_x = xf.shape[1]
     xfa = np.mean(xf, axis=0)
     dxf = xf - xfa
-    Hxf = H @ xf.T
-    dyf = Hxf - H @ xfa.reshape(-1, 1)
+    Hxf = (H @ xf.T).T
+    dyf = Hxf - H @ xfa
 
     @ray.remote
-    def xaj(j, args, bar):
+    def xaj_parallel(j, args, bar):
+        xa = xaj(j, args)
+        # for progress bar
+        bar.update.remote(1)
+        return xa
+
+    def xaj(j, args):
         y_indexes, dyf, nmem, y0, xf, xfa, dxf, lmat, Hxf = args
         invR, nzero = invR_nonZero(lmat, j, y_indexes)
         dyfj = dyf[:, nzero]
@@ -239,27 +245,35 @@ def letkf_update(
         p_inv = np.diag(1 / w)
         Wa = v @ p_invsq @ v.T
         Was = v @ p_inv @ v.T
-
-        yHxf_nzero = y0[nzero] - Hxf.mean(axis=1)[nzero]
+        yHxf_nzero = y0[:, nzero] - Hxf.mean(axis=0)
         xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf_nzero.T + np.sqrt(nmem - 1) * Wa)
-
-        # for progress bar
-        bar.update.remote(1)
 
         return xaj
 
-    # for ray put
-    ray.init(num_cpus=num_cpus)
+    # for single test
     argset = [y_indexes, dyf, nmem, y0, xf, xfa, dxf, lmat, Hxf]
-    argset_ids = ray.put(argset)
+    if num_cpus == 1:
+        xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
+        return xajTsingle
+
+    # for ray put
+    try:
+        ray.shutdown()
+    except:
+        pass
+
+    ray.init(num_cpus=num_cpus)
 
     # for progress bar
     remote_tqdm = ray.remote(tqdm_ray.tqdm)
     bar = remote_tqdm.remote(total=dim_x)
 
+    # for args
+    argset_ids = ray.put(argset)
+
     # parallel progress
-    rayget = ray.get([xaj.remote(j, argset_ids, bar) for j in range(dim_x)])
+    rayget = ray.get([xaj_parallel.remote(j, argset_ids, bar) for j in range(dim_x)])
     ray.shutdown()
 
     xa = np.array(rayget)
-    return xa
+    return xa.T
