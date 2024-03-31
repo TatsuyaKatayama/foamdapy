@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.sparse import coo_matrix
 
 from foamdapy.tools import decimal_normalize
 from foamdapy.tools import letkf_update
@@ -22,17 +23,18 @@ def test_letkf_update():
         ],
         axis=1,
     )
-    H = np.array([[0, 1, 0], [0, 0, 1]])
-
+    # H = np.array([[0, 1, 0], [0, 0, 1]])
+    Hcoo = coo_matrix(([1, 1], ([0, 1], [1, 2])))
+    Hlil = Hcoo.tolil()
     t0 = xf * 2.0
     y0 = t0[:, -num_obs:]
     y_indexes = np.array([1, 2])
     lmat = np.full((3, 3), 1.0)
     num_cpu = 1
-    xa_loop = letkf_update(xf, H, y0, y_indexes, lmat, num_cpu)
+    xa_loop = letkf_update(xf, Hlil, y0, y_indexes, lmat, num_cpu)
     xa1 = xa_loop.copy()
     for i in range(5):
-        xa_loop = letkf_update(xa_loop, H, y0, y_indexes, lmat, num_cpu)
+        xa_loop = letkf_update(xa_loop, Hlil, y0, y_indexes, lmat, num_cpu)
 
     # test of converges to observed value
     assert (
@@ -41,5 +43,5 @@ def test_letkf_update():
 
     # parallel test
     num_cpu = 2
-    xa2 = letkf_update(xf, H, y0, y_indexes, lmat, num_cpu)
+    xa2 = letkf_update(xf, Hlil, y0, y_indexes, lmat, num_cpu)
     assert (np.round(xa1.mean(axis=0), 9) == np.round(xa2.mean(axis=0), 9)).all()

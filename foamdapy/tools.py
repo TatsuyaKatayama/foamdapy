@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from scipy.sparse import lil_matrix
 from tqdm import trange
 import ray
 from ray.experimental import tqdm_ray
@@ -200,7 +201,7 @@ def decimal_normalize(floatOrInt, digit: int = 5):
 
 def letkf_update(
     xf: np.array,
-    H: np.array,
+    Hlil: lil_matrix,
     y0: np.array,
     y_indexes: list,
     lmat: np.array,
@@ -210,7 +211,7 @@ def letkf_update(
 
     Args:
         xf (np.array): アンサンブル予報マトリクス(アンサンブル数, 状態変数の数)
-        H (np.array): 観測演算マトリクス（観測点数, 状態変数の数）
+        Hlil (lil_matrix): 観測演算マトリクス（観測点数, 状態変数の数）scipy.sparce.lil_matrix
         y0 (np.array): 観測データ(観測点数)
         y_indexes (list): 状態変数に対応する観測インデックスのリスト
         lmat (np.array): cell間距離に応じて正規分布する影響度マトリクス
@@ -223,8 +224,8 @@ def letkf_update(
     dim_x = xf.shape[1]
     xfa = np.mean(xf, axis=0)
     dxf = xf - xfa
-    Hxf = (H @ xf.T).T
-    dyf = Hxf - H @ xfa
+    Hxf = (Hlil @ xf.T).T
+    dyf = Hxf - Hlil @ xfa
 
     @ray.remote
     def xaj_parallel(j, args, bar):
@@ -234,7 +235,7 @@ def letkf_update(
         return xa
 
     def xaj(j, args):
-        y_indexes, dyf, nmem, y0, xf, xfa, dxf, lmat, Hxf = args
+        y_indexes, dyflil, nmem, y0, xfa, dxf, lmat, Hxf = args
         invR, nzero = invR_nonZero(lmat, j, y_indexes)
         dyfj = dyf[:, nzero]
         C = dyfj @ invR
@@ -251,7 +252,7 @@ def letkf_update(
         return xaj
 
     # for single test
-    argset = [y_indexes, dyf, nmem, y0, xf, xfa, dxf, lmat, Hxf]
+    argset = [y_indexes, dyf, nmem, y0, xfa, dxf, lmat, Hxf]
     if num_cpus == 1:
         xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
         return xajTsingle
