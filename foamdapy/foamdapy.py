@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.matlib as mb
 
-from scipy.sparse import coo_matrix
+from scipy.sparse import lil_matrix
 
 import os
 import glob
@@ -64,10 +64,8 @@ class EnSim:
     def createH(self):
         # H = np.identity(self.dim_x)
         # return H[self.y_indexes]
-        Hcoo = coo_matrix(
-            (np.ones(self.y0.shape), (np.arange(0, self.y0.size, 1), self.y_indexes))
-        )
-        Hlil = Hcoo.tolil()
+        Hlil = lil_matrix((self.y0.size, self.dim_x))
+        Hlil[np.arange(0, self.y0.size, 1), self.y_indexes] = np.ones(self.y0.shape)
         return Hlil
 
     def case_dirs(self):

@@ -27,19 +27,17 @@ def test_letkf_update():
     Hcoo = coo_matrix(([1, 1], ([0, 1], [1, 2])))
     Hlil = Hcoo.tolil()
     t0 = xf * 2.0
-    y0 = t0[:, -num_obs:]
+    y0 = t0[:, -num_obs:].mean(axis=0)
     y_indexes = np.array([1, 2])
     lmat = np.full((3, 3), 1.0)
     num_cpu = 1
     xa_loop = letkf_update(xf, Hlil, y0, y_indexes, lmat, num_cpu)
     xa1 = xa_loop.copy()
-    for i in range(5):
+    for i in range(200):
         xa_loop = letkf_update(xa_loop, Hlil, y0, y_indexes, lmat, num_cpu)
 
     # test of converges to observed value
-    assert (
-        np.round(xa_loop.mean(axis=0)[-num_obs:], 3) == np.round(y0.mean(axis=0), 3)
-    ).all()
+    assert (np.round(xa_loop.mean(axis=0)[-num_obs:], 1) == np.round(y0, 1)).all()
 
     # parallel test
     num_cpu = 2

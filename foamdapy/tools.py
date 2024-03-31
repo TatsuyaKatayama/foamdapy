@@ -235,7 +235,7 @@ def letkf_update(
         return xa
 
     def xaj(j, args):
-        y_indexes, dyflil, nmem, y0, xfa, dxf, lmat, Hxf = args
+        y_indexes, dyf, nmem, y0, xfa, dxf, lmat, Hxf = args
         invR, nzero = invR_nonZero(lmat, j, y_indexes)
         dyfj = dyf[:, nzero]
         C = dyfj @ invR
@@ -246,8 +246,10 @@ def letkf_update(
         p_inv = np.diag(1 / w)
         Wa = v @ p_invsq @ v.T
         Was = v @ p_inv @ v.T
-        yHxf_nzero = y0[:, nzero] - Hxf.mean(axis=0)
-        xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf_nzero.T + np.sqrt(nmem - 1) * Wa)
+        yHxf_nzero = y0[nzero] - Hxf.mean(axis=0)[nzero]
+        xaj = xfa[j] + dxf[:, j] @ (
+            Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa
+        )
 
         return xaj
 
