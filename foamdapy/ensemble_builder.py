@@ -28,9 +28,7 @@ class ensemble_case_builder:
         newdir = os.path.join(in_dir, newname)
         shutil.move(olddir, newdir)
 
-    def allrun(self, ti: float, tj: float, dt: float, t_en: float):
-        self.calc_org(f"{ti}")
-        self.calc_org(f"{tj}", f"{dt}")
+    def create_member(self, ti: float, tj: float, dt: float, t_en: float):
         for i, t in enumerate(np.arange(ti, tj, dt)):
             new_menber = self.ensemble_prefix + f"{i}".rjust(2, "0")
             new_menber_dir = os.path.join(self.ensemble_dir, new_menber)
@@ -39,3 +37,8 @@ class ensemble_case_builder:
 
             self.add_menber(new_menber_dir, clone_dirs_in_org)
             self.rename_dir(new_menber_dir, timename, decimal_normalize(t_en))
+
+    def allrun(self, ti: float, tj: float, dt: float, t_en: float):
+        self.calc_org(f"{ti}")
+        self.calc_org(f"{tj}", f"{dt}")
+        self.create_member(ti, tj, dt, t_en)

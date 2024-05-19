@@ -82,6 +82,10 @@ class EnSim:
         for i, case in enumerate(self.cases):
             case.copyTimeDir(time_name, to_time_name)
 
+    def rm_time_dir(self, time_name: str):
+        for i, case in enumerate(self.cases):
+            case.removeTimeDir(time_name)
+
     def update_cases(self, time_name):
         for i, case in enumerate(self.cases):
             case.writeValues(self.xa[i], f"{time_name}", self.x_names)
@@ -107,10 +111,8 @@ class EnSim:
         lmat = localizemat(self.mat_d, 0.1)
         self.xa = letkf_update(xf, H, y0, y_indexes, lmat, self.num_cpus)
 
-    def limit_alpha_in_xa(self):
+    def limit_val_in_xa(self, slice_st: int, slice_end: int, min_val, max_val):
         xa = self.xa
-        xa_alpha = xa[:, 6 * 3072 : 7 * 3072]
-        xa_alpha[xa_alpha < 0] = 0
-        xa_alpha[xa_alpha > 1] = 1
-        xa[:, 2 * 3072 : 3 * 3072] = 0  # Uza
-        xa[:, 5 * 3072 : 6 * 3072] = 0  # Uzw
+        xa_alpha = xa[:, slice_st:slice_end]
+        xa_alpha[xa_alpha < min_val] = min_val
+        xa_alpha[xa_alpha > max_val] = max_val

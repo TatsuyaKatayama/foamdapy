@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import re
 from scipy.sparse import lil_matrix
 from tqdm import trange
 import ray
@@ -172,12 +173,16 @@ def update_of(x_data: np.ndarray, case_path: str, time_name: str, x_names: list)
         n_column = 1
         if "vector" in Xc.name:
             n_column = 3
-        Xa = x_data[: n_column * len(Xc)].reshape([n_column, -1]).T
-        # 次の変数用に今回のデータをスライスで削除
-        # x_data = x_data[n_column * len(Xc) :]
+        Xa = x_data[: n_column * len(Xc)]
+        if not n_column == 1:
+            Xa = Xa.reshape([n_column, -1]).T
         # 書き戻し
-        Xfile.content["internalField"] = Field(Xa.tolist(), Xc.name)
+        fi = Field(Xa.tolist(), Xc.name)
+        p = re.compile("\n  3\n")
+        Xfile.content["internalField"] = p.sub("", str(fi))
         Xfile.writeFile()
+        # 次の変数用に今回のデータをスライスで削除
+        x_data = x_data[n_column * len(Xc) :]
 
 
 def decimal_normalize(floatOrInt, digit: int = 5):
