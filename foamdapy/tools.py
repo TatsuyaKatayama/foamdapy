@@ -86,16 +86,42 @@ def localizemat(cell_distance: np.array, lim=0.1):
     return localizemat
 
 
-def invR_nonZero(localizemat: np.array, idx: int, obs_indexes: np.array):
+def createRdiag_from_xf(xf: np.array, n_cells: int, obs_indexes: np.array, sigma2=0.01):
+    """観測誤差の分散行列の対角成分。（観測誤差が互いに相関しない仮定）
+    変数のレンジ（max-min)に対し、2σ(95%) = sigma2として、分散行列を計算。
+
+    Args:
+        xf (np.array): (アンサンブルメンバ, 状態変数)の行列。
+        n_cells (int): セル数
+        obs_indexes (np.array): 観測index
+        sigma2 (float, optional): 2σ(95%)の観測精度. Defaults to 0.01.
+
+    Returns:
+        np.array: 観測誤差の分散行列Rの対角成分ベクトル
+    """
+    R_diag = np.zeros(xf.shape[1])
+    n_x = int(xf.shape[1] / n_cells)
+    for i in range(n_x):
+        xfi = xf[:, n_cells * i : n_cells * (i + 1)]
+        sigma = (xfi.max() - xfi.min()) * sigma2 / 2.0
+        sq_sigma = sigma * sigma
+        R_diag[n_cells * i : n_cells * (i + 1)] = sq_sigma
+    return R_diag[obs_indexes]
+
+
+def invR_nonZero(
+    R_diag: np.array, localizemat: np.array, idx: int, obs_indexes: np.array
+):
     """idx番のcellに対して、観測indexesのinvRと影響0でないかどうかの行列を返す
 
     Args:
+        R_diag (np.array): 観測誤差の分散行列Rの対角成分ベクトル
         localizemat (np.array): im～1の影響度マトリクス(cell数,cell数)
         idx (int): 調査したいcell番号
         obs_indexes (np.array): 観測indexes
 
     Returns:
-        taple: invR: 距離行列rの逆行列(観測indexes数,観測indexes数)
+        taple: invR: idx番のcellに対する観測誤差の共分散行列Rの逆行列(観測indexes数,観測indexes数)
                indx_nozero: 影響度0でないかのboolean行列 ex) (True, False, True...)
     """
     obs_indexes = obs_indexes.reshape(1, -1)[0]
@@ -105,11 +131,12 @@ def invR_nonZero(localizemat: np.array, idx: int, obs_indexes: np.array):
     limmax = obs_indexes > max_index
     idx = idx % len(localizemat)
     obs_indexes = obs_indexes % len(localizemat)
-    invR_diag = localizemat[idx][obs_indexes].T
-    invR_diag[limmin] = 0.0
-    invR_diag[limmax] = 0.0
-    indx_nozero = invR_diag > 0
-    invR = np.diag(invR_diag[indx_nozero])
+    eff_distance_vec = localizemat[idx][obs_indexes].T
+    eff_distance_vec[limmin] = 0.0
+    eff_distance_vec[limmax] = 0.0
+    indx_nozero = eff_distance_vec > 0
+    invR_diag = 1.0 / R_diag[indx_nozero] * eff_distance_vec[indx_nozero]
+    invR = np.diag(invR_diag)
     return invR, indx_nozero
 
 
@@ -208,6 +235,7 @@ def letkf_update(
     xf: np.array,
     Hlil: lil_matrix,
     y0: np.array,
+    R_diag: np.array,
     y_indexes: list,
     lmat: np.array,
     num_cpus: int,
@@ -218,6 +246,7 @@ def letkf_update(
         xf (np.array): アンサンブル予報マトリクス(アンサンブル数, 状態変数の数)
         Hlil (lil_matrix): 観測演算マトリクス（観測点数, 状態変数の数）scipy.sparce.lil_matrix
         y0 (np.array): 観測データ(観測点数)
+        R_diag (np.array): 観測データの分散行列の対角成分
         y_indexes (list): 状態変数に対応する観測インデックスのリスト
         lmat (np.array): cell間距離に応じて正規分布する影響度マトリクス
         num_cpus (int): 並列コア数
@@ -241,7 +270,7 @@ def letkf_update(
 
     def xaj(j, args):
         y_indexes, dyf, nmem, y0, xfa, dxf, lmat, Hxf = args
-        invR, nzero = invR_nonZero(lmat, j, y_indexes)
+        invR, nzero = invR_nonZero(R_diag, lmat, j, y_indexes)
         dyfj = dyf[:, nzero]
         C = dyfj @ invR
         w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + C @ dyfj.T)
