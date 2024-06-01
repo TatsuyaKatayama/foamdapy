@@ -12,6 +12,7 @@ import glob
 from .tools import cell_distance
 from .tools import localizemat
 from .tools import letkf_update
+from .tools import createRdiag_from_xf
 from .foamer import OFCase
 
 
@@ -103,13 +104,16 @@ class EnSim:
         case = self.obs_case
         self.y0 = case.getValues(time_name, self.y_names, self.obs_cells)
 
+    def set_R_diag(self):
+        self.R_diag = createRdiag_from_xf(self.xf, self.n_cells, self.y_indexes)
+
     def letkf_update(self):
         xf = self.xf
         H = self.H
         y_indexes = self.y_indexes
         y0 = self.y0
         lmat = localizemat(self.mat_d, 0.1)
-        self.xa = letkf_update(xf, H, y0, y_indexes, lmat, self.num_cpus)
+        self.xa = letkf_update(xf, H, y0, self.R_diag, y_indexes, lmat, self.num_cpus)
 
     def limit_val_in_xa(self, slice_st: int, slice_end: int, min_val, max_val):
         xa = self.xa
