@@ -13,11 +13,8 @@ import glob
 from .tools import cell_distance
 from .tools import localizemat
 from .tools import letkf_update
-<<<<<<< HEAD
 from .tools import parallel_run
-=======
 from .tools import createRdiag_from_xf
->>>>>>> develop
 from .foamer import OFCase
 
 
@@ -88,21 +85,15 @@ class EnSim:
         for i, case in enumerate(self.cases):
             case.copyTimeDir(time_name, to_time_name)
 
-<<<<<<< HEAD
+    def rm_time_dir(self, time_name: str):
+        for i, case in enumerate(self.cases):
+            case.removeTimeDir(time_name)
+
     def update_cases(self, time_name, ray_reinit):
         def writeVal(args0, args1):
             i, case = args0
             xa, time_name, x_names = args1
             case.writeValues(xa[i], f"{time_name}", x_names)
-=======
-    def rm_time_dir(self, time_name: str):
-        for i, case in enumerate(self.cases):
-            case.removeTimeDir(time_name)
-
-    def update_cases(self, time_name):
-        for i, case in enumerate(self.cases):
-            case.writeValues(self.xa[i], f"{time_name}", self.x_names)
->>>>>>> develop
 
         args1 = [self.xa, time_name, self.x_names]
         if self.num_cpus == 1:

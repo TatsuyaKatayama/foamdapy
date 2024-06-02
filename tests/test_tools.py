@@ -4,9 +4,7 @@ import ray
 
 from foamdapy.tools import decimal_normalize
 from foamdapy.tools import letkf_update
-<<<<<<< HEAD
 from foamdapy.tools import parallel_run
-=======
 from foamdapy.tools import createRdiag_from_xf
 
 
@@ -31,7 +29,6 @@ def test_createRdiag_from_xf():
     res = createRdiag_from_xf(xf, n_cells, obs_indexes)
     assert res[0] == ((x1[1] - x1[0]) * 0.01 / 2.0) ** 2
     assert res[1] == ((x2[1] - x2[0]) * 0.01 / 2.0) ** 2
->>>>>>> develop
 
 
 def test_decimal_normalize():
