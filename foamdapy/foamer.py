@@ -36,6 +36,11 @@ class OFCase:
         new_path = shutil.copytree(fromDir, toDir, dirs_exist_ok)
         return new_path
 
+    def removeTimeDir(self, time_name: str, ignore_errors=False):
+        rmDir = os.path.join(self.case_dir, time_name)
+        shutil.rmtree(rmDir, ignore_errors)
+        return
+
     def forcast(self, end_time: str, writeInterval: str = None):
         # 再計算しない
         time_dir = os.path.join(self.case_dir, end_time)
@@ -60,6 +65,17 @@ class OFCase:
 
         # "xxFoam -case path_to_case"コマンドを分割
         foamCMD = shlex.split(f"{app} -case {self.case_dir}")
+        # xxFoamを実行を行うインスタンスの生成
+        foamRunner = BasicRunner(foamCMD, silent=True)
+        # xxFoamの実行。実行結果情報を返す
+        foamState = foamRunner.start()
+        return foamState
+
+    def exec_ofcmd(self, ofcmd: str = None):
+        # 空なら実行しない
+        if ofcmd is None:
+            return
+        foamCMD = shlex.split(f"{ofcmd} -case {self.case_dir}")
         # xxFoamを実行を行うインスタンスの生成
         foamRunner = BasicRunner(foamCMD, silent=True)
         # xxFoamの実行。実行結果情報を返す
