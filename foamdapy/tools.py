@@ -261,13 +261,6 @@ def letkf_update(
     Hxf = (Hlil @ xf.T).T
     dyf = Hxf - Hlil @ xfa
 
-    @ray.remote
-    def xaj_parallel(j, args, bar):
-        xa = xaj(j, args)
-        # for progress bar
-        bar.update.remote(1)
-        return xa
-
     def xaj(j, args):
         y_indexes, dyf, nmem, y0, xfa, dxf, lmat, Hxf = args
         invR, nzero = invR_nonZero(R_diag, lmat, j, y_indexes)
@@ -293,13 +286,8 @@ def letkf_update(
         xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
         return xajTsingle
 
-    # for ray put
-    try:
-        ray.shutdown()
-    except:
-        pass
-
-    ray.init(num_cpus=num_cpus)
+    # ray
+    ray.init(num_cpus=num_cpus, ignore_reinit_error=True)
 
     # for progress bar
     remote_tqdm = ray.remote(tqdm_ray.tqdm)
@@ -309,8 +297,40 @@ def letkf_update(
     argset_ids = ray.put(argset)
 
     # parallel progress
-    rayget = ray.get([xaj_parallel.remote(j, argset_ids, bar) for j in range(dim_x)])
+    rayget = ray.get(
+        [parallel_run.remote(xaj, j, argset_ids, bar) for j in range(dim_x)]
+    )
     ray.shutdown()
 
     xa = np.array(rayget)
     return xa.T
+
+
+class dummy_bar:
+    """This is the dummy bar for tqdm_ray."""
+
+    def __init__(self):
+        self.update = self.update()
+
+    class update:
+        @classmethod
+        def remote(self, args):
+            pass
+
+
+@ray.remote
+def parallel_run(single_func: any, args: any, args_ids: any, bar=dummy_bar()):
+    """rayを使った並列計算。
+
+    Args:
+        single_func (any): rayで並列化したいfunc. 引数にargs, args_idsが必要。
+        args (any): 各スレッドにコピーするオブジェクト。メモリ共有してない。
+        args_ids (any,ray._raylet.ObjectRef): rayで事前にputしたオブジェクト。メモリ共有
+        bar (ray.actor.ActorHandle, optional): tqdm_ray bar. Defaults to dummy_bar().
+
+    Returns:
+        _type_: 計算結果。ray.getとかで受け取る。
+    """
+    rtn = single_func(args, args_ids)
+    bar.update.remote(1)
+    return rtn
