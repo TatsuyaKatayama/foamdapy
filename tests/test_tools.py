@@ -1,13 +1,37 @@
 import numpy as np
 from scipy.sparse import coo_matrix
+import ray
 
 from foamdapy.tools import decimal_normalize
 from foamdapy.tools import letkf_update
+from foamdapy.tools import parallel_run
 
 
 def test_decimal_normalize():
     assert decimal_normalize(3.00001) == "3.00001"
     assert decimal_normalize(3.000001) == "3"
+
+
+def test_parallel_run():
+    np.random.seed(0)
+
+    def singleFunc(args0, args1):
+        i = args0
+        mat0, mat1 = args1
+        rtn = mat0[i, :] @ mat1[:, i]
+        return rtn
+
+    mat0 = np.random.random(25).reshape(-1, 5)
+    mat1 = np.random.random(25).reshape(-1, 5)
+    res_single = np.array([singleFunc(i, [mat0, mat1]) for i in range(5)])
+
+    args_ids = ray.put([mat0, mat1])
+    ray.init(num_cpus=2, ignore_reinit_error=True)
+    ray_get = ray.get([parallel_run.remote(singleFunc, i, args_ids) for i in range(5)])
+    ray.shutdown()
+    res_parallel = np.array(ray_get)
+
+    assert (res_single == res_parallel).all
 
 
 def test_letkf_update():

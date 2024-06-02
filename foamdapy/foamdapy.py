@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.matlib as mb
+import ray
 
 from scipy.sparse import lil_matrix
 
@@ -12,6 +13,7 @@ import glob
 from .tools import cell_distance
 from .tools import localizemat
 from .tools import letkf_update
+from .tools import parallel_run
 from .foamer import OFCase
 
 
@@ -82,14 +84,50 @@ class EnSim:
         for i, case in enumerate(self.cases):
             case.copyTimeDir(time_name, to_time_name)
 
-    def update_cases(self, time_name):
-        for i, case in enumerate(self.cases):
-            case.writeValues(self.xa[i], f"{time_name}", self.x_names)
+    def update_cases(self, time_name, ray_reinit):
+        def writeVal(args0, args1):
+            i, case = args0
+            xa, time_name, x_names = args1
+            case.writeValues(xa[i], f"{time_name}", x_names)
 
-    def ensemble_forcast(self, time_name):
-        for i, case in enumerate(self.cases):
+        args1 = [self.xa, time_name, self.x_names]
+        if self.num_cpus == 1:
+            for i, case in enumerate(self.cases):
+                args0 = [i, case]
+                writeVal(args0, args1)
+        else:
+            args_ids = ray.put(args1)
+            if ray_reinit:
+                ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True)
+            ray.get(
+                [
+                    parallel_run.remote(writeVal, [i, case], args_ids)
+                    for i, case in enumerate(self.cases)
+                ]
+            )
+            if ray_reinit:
+                ray.shutdown
+
+    def ensemble_forcast(self, time_name, ray_reinit=False):
+        def forcast(case, args):
+            time_name, x_names = args
             case.forcast(f"{time_name}")
-            self.xf[i] = case.getValues(time_name, self.x_names)
+            return case.getValues(time_name, self.x_names)
+
+        args = time_name, self.x_names
+        if self.num_cpus == 1:
+            for i, case in enumerate(self.cases):
+                self.xf[i] = forcast(case, args)
+        else:
+            args_ids = ray.put(args)
+            if ray_reinit:
+                ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True)
+            ray_get = ray.get(
+                [parallel_run.remote(forcast, case, args_ids) for case in self.cases]
+            )
+            if ray_reinit:
+                ray.shutdown
+            self.xf = np.array(ray_get)
 
     def clearPatternInCases(self, pattern: str):
         for case in self.cases:
