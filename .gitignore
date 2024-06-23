@@ -3,6 +3,7 @@
 mixerVessel2D
 poetry.lock
 ensim*
+./notebooks/ensim*
 
 
 
