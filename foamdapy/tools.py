@@ -286,9 +286,6 @@ def letkf_update(
         xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
         return xajTsingle
 
-    # ray
-    ray.init(num_cpus=num_cpus, ignore_reinit_error=True)
-
     # for progress bar
     remote_tqdm = ray.remote(tqdm_ray.tqdm)
     bar = remote_tqdm.remote(total=dim_x)
@@ -300,7 +297,6 @@ def letkf_update(
     rayget = ray.get(
         [parallel_run.remote(xaj, j, argset_ids, bar) for j in range(dim_x)]
     )
-    ray.shutdown()
 
     xa = np.array(rayget)
     return xa.T
