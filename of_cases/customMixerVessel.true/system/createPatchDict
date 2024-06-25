@@ -1,0 +1,105 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2212                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      createPatchDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+pointSync false;
+patches
+(
+    {
+        name inlet;
+        patchInfo
+        {
+            type        patch;
+
+            patchFields //todo
+            {
+/*                U.oil
+                {
+                    type            fixedValue;
+                    value           uniform (1 0 0);
+                }
+                U.air
+                {
+                    type            fixedValue;
+                    value           uniform (1 0 0);
+                }
+                alpha.oil
+                {
+                    type            fixedValue;
+                    value           uniform 0.5;
+                }
+                alpha.air
+                {
+                    type            fixedValue;
+                    value           uniform 0.8;
+                }
+                p_rgh
+                {
+                    type            fixedFluxPressure;
+                    value           uniform 0;
+                }
+*/
+            }
+        }
+        constructFrom set;
+        set inlet;
+    }
+    {
+        name outlet;
+        patchInfo
+        {
+            type        patch;
+
+            patchFields //todo
+            {
+  /*              U.oil
+                {
+                    type               pressureInletOutletVelocity;
+                    phi                phi.oil;
+                    value              $internalField;
+                }
+                U.air
+                {
+                    type               pressureInletOutletVelocity;
+                    phi                phi.air;
+                    value              $internalField;
+                }
+                alpha.oil
+                {
+                    type            inletOutlet;
+                    phi             phi.oil;
+                    inletValue      uniform 0;
+                    value           uniform 0;
+                }
+                alpha.air
+                {
+                    type            inletOutlet;
+                    phi             phi.air;
+                    inletValue      uniform 0;
+                    value           uniform 0;
+                }
+                p_rgh
+                {
+                    type            fixedValue;
+                    value           uniform 0;
+                }
+*/
+}
+        }
+        constructFrom set;
+        set outlet;
+    }
+);
+
+// ************************************************************************* //
