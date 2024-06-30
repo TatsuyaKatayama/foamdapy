@@ -89,7 +89,7 @@ class EnSim:
         for i, case in enumerate(self.cases):
             case.removeTimeDir(time_name)
 
-    def update_cases(self, time_name, ray_reinit):
+    def update_cases(self, time_name):
         def writeVal(args0, args1):
             i, case = args0
             xa, time_name, x_names = args1
@@ -100,20 +100,17 @@ class EnSim:
             for i, case in enumerate(self.cases):
                 args0 = [i, case]
                 writeVal(args0, args1)
-        else:
-            args_ids = ray.put(args1)
-            if ray_reinit:
-                ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True)
-            ray.get(
-                [
-                    parallel_run.remote(writeVal, [i, case], args_ids)
-                    for i, case in enumerate(self.cases)
-                ]
-            )
-            if ray_reinit:
-                ray.shutdown
+            return
 
-    def ensemble_forcast(self, time_name, ray_reinit=False):
+        args_ids = ray.put(args1)
+        ray.get(
+            [
+                parallel_run.remote(writeVal, [i, case], args_ids)
+                for i, case in enumerate(self.cases)
+            ]
+        )
+
+    def ensemble_forcast(self, time_name):
         def forcast(case, args):
             time_name, x_names = args
             case.forcast(f"{time_name}")
@@ -123,16 +120,13 @@ class EnSim:
         if self.num_cpus == 1:
             for i, case in enumerate(self.cases):
                 self.xf[i] = forcast(case, args)
-        else:
-            args_ids = ray.put(args)
-            if ray_reinit:
-                ray.init(num_cpus=self.num_cpus, ignore_reinit_error=True)
-            ray_get = ray.get(
-                [parallel_run.remote(forcast, case, args_ids) for case in self.cases]
-            )
-            if ray_reinit:
-                ray.shutdown
-            self.xf = np.array(ray_get)
+            return
+
+        args_ids = ray.put(args)
+        ray_get = ray.get(
+            [parallel_run.remote(forcast, case, args_ids) for case in self.cases]
+        )
+        self.xf = np.array(ray_get)
 
     def clearPatternInCases(self, pattern: str):
         for case in self.cases:
@@ -158,3 +152,26 @@ class EnSim:
         xa_alpha = xa[:, slice_st:slice_end]
         xa_alpha[xa_alpha < min_val] = min_val
         xa_alpha[xa_alpha > max_val] = max_val
+
+    def set_xf(self, time_name: str):
+        def getVal(case: OFCase, args):
+            time_name, x_names = args
+            xfi = case.getValues(time_name, x_names)
+            return xfi
+
+        if self.num_cpus == 1:
+            for i, case in enumerate(self.cases):
+                self.xf[i] = getVal(case, [time_name, self.x_names])
+            return
+
+        args_ids = ray.put([time_name, self.x_names])
+        ray_get = ray.get(
+            [parallel_run.remote(getVal, case, args_ids) for case in self.cases]
+        )
+        self.xf = np.array(ray_get)
+
+    def start_ray(self, ignore_reinit_error=True):
+        ray.init(num_cpus=self.num_cpus, ignore_reinit_error=ignore_reinit_error)
+
+    def shutdown_ray(self):
+        ray.shutdown()

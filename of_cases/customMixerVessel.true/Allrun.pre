@@ -1,0 +1,36 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+m4 system/blockMeshDict.m4 > system/blockMeshDict
+runApplication blockMesh
+
+runApplication topoSet
+mv log.topoSet log.topoSet.rot
+
+runApplication setsToZones -noFlipMap
+
+
+runApplication topoSet -dict ./system/topoSetDict.mesh
+mv log.topoSet log.topoSet.mesh
+runApplication extrudeMesh -dict system/extrudeMeshDict.inlet
+mv log.extrudeMesh log.extrudeMesh.inlet
+runApplication extrudeMesh -dict system/extrudeMeshDict.outlet
+mv log.extrudeMesh log.extrudeMesh.outlet
+
+sed -i -r 's/^\(-0.2[^ ]+ (.*)/\(-0.2 \1/' ./constant/polyMesh/points
+sed -i -r 's/^\(0.2[^ ]+ (.*)/\(0.2 \1/' ./constant/polyMesh/points
+
+runApplication topoSet -dict ./system/topoSetDict.patch
+mv log.topoSet log.topoSet.patch
+
+runApplication surfaceToPatch -faceSet inlet
+mv log.surfaceToPatch log.surfaceToPatch.inlet
+
+runApplication surfaceToPatch -faceSet outlet
+mv log.surfaceToPatch log.surfaceToPatch.outlet
+
+
+
+#------------------------------------------------------------------------------
