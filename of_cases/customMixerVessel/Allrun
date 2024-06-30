@@ -11,6 +11,8 @@ restore0Dir
 
 runApplication postProcess -func writeCellCentres -time 0
 
+runApplication setFields
+
 cp -r orig.1.5 1.5
 
 runApplication $(getApplication)
