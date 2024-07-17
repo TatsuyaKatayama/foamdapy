@@ -1,10 +1,9 @@
 # katayama
 .vscode
 mixerVessel2D
-poetry.lock
+poetry.*
 ensim*
 ./notebooks/ensim*
-
 
 
 
