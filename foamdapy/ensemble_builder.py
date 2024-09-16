@@ -17,6 +17,14 @@ class ensemble_case_builder:
     def calc_org(self, end_time: str, writeInterval: str = None):
         self.org_case.forcast(end_time, writeInterval)
 
+    def org_clones(self, num_clones:int):
+        org_dir = self.org_case.case_dir
+        for i in range(num_clones):
+            new_menber = self.ensemble_prefix + f"{i}".rjust(2, "0")
+            new_menber_dir = os.path.join(self.ensemble_dir, new_menber)
+            shutil.copytree(org_dir, new_menber_dir, True)
+        
+
     def add_menber(self, new_menber_dir: str, clone_dirs_in_org: list):
         for dir in clone_dirs_in_org:
             org_dir = os.path.join(self.org_case.case_dir, dir)
