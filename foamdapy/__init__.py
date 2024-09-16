@@ -1,3 +1,3 @@
-from foamdapy.foamdapy import EnSim
+from foamdapy.foamdapy import EnSim, EnSim2
 
-__all__ = [EnSim]
+__all__ = [EnSim, EnSim2]

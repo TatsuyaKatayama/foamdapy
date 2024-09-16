@@ -1,13 +1,14 @@
 import os
-import numpy as np
 import re
+
+import numpy as np
+import ray
+from PyFoam.Basics.DataStructures import Field
+from PyFoam.RunDictionary.ParsedParameterFile import ParsedParameterFile
+from PyFoam.RunDictionary.SolutionDirectory import SolutionDirectory
+from ray.experimental import tqdm_ray
 from scipy.sparse import lil_matrix
 from tqdm import trange
-import ray
-from ray.experimental import tqdm_ray
-from PyFoam.Basics.DataStructures import Field
-from PyFoam.RunDictionary.SolutionDirectory import SolutionDirectory
-from PyFoam.RunDictionary.ParsedParameterFile import ParsedParameterFile
 
 
 def extract_val(case_path: str, time_name: str, x_names: list, cells: list = None):
@@ -53,9 +54,9 @@ def cell_distance(case_path: str):
 
     Returns:
         np.array: 対角成分が0の対称行列(cell数,cell数)
-        ex) [0.0, 1.0, 0.5]
-            [0.5, 0.0, 0.5]
-            [1.0, 0.5, 0.0]
+        ex) [ 0.0,  0.5,  1.0]
+            [-0.5,  0.0,  0.5]
+            [-1.0, -0.5,  0.0]
     """
     case_path = os.path.join(case_path)
     case = SolutionDirectory(case_path)
@@ -102,16 +103,14 @@ def createRdiag_from_xf(xf: np.array, n_cells: int, obs_indexes: np.array, sigma
     R_diag = np.zeros(xf.shape[1])
     n_x = int(xf.shape[1] / n_cells)
     for i in range(n_x):
-        xfi = xf[:, n_cells * i : n_cells * (i + 1)]
+        xfi = xf[:, n_cells * i:n_cells * (i + 1)]
         sigma = (xfi.max() - xfi.min()) * sigma2 / 2.0
         sq_sigma = sigma * sigma
-        R_diag[n_cells * i : n_cells * (i + 1)] = sq_sigma
+        R_diag[n_cells * i:n_cells * (i + 1)] = sq_sigma
     return R_diag[obs_indexes]
 
 
-def invR_nonZero(
-    R_diag: np.array, localizemat: np.array, idx: int, obs_indexes: np.array
-):
+def invR_nonZero(R_diag: np.array, localizemat: np.array, idx: int, obs_indexes: np.array):
     """idx番のcellに対して、観測indexesのinvRと影響0でないかどうかの行列を返す
 
     Args:
@@ -151,16 +150,14 @@ def cell_indies_layer(n_layer: int, cxyz: np.array):
     Returns:
         np.array : 外周層のcell indexes
     """
-    c2r = np.sqrt(cxyz[:, 0] ** 2 + cxyz[:, 1] ** 2 + cxyz[:, 2] ** 2)
+    c2r = np.sqrt(cxyz[:, 0]**2 + cxyz[:, 1]**2 + cxyz[:, 2]**2)
     c2r = np.round(c2r, 6)
     r_list_rev = np.sort(np.unique(c2r))[::-1]
     r_list_layer = r_list_rev[:n_layer]
     return np.where(np.isin(c2r, r_list_layer))[0]
 
 
-def pickup_rewite(
-    read_file_path: str, write_file_path: str, cells: list, new_val: float = 2.0
-):
+def pickup_rewite(read_file_path: str, write_file_path: str, cells: list, new_val: float = 2.0):
     """cell list以外を任意の値に変更して、OFの変数ファイルを再作成する関数
 
     Args:
@@ -200,7 +197,7 @@ def update_of(x_data: np.ndarray, case_path: str, time_name: str, x_names: list)
         n_column = 1
         if "vector" in Xc.name:
             n_column = 3
-        Xa = x_data[: n_column * len(Xc)]
+        Xa = x_data[:n_column * len(Xc)]
         if not n_column == 1:
             Xa = Xa.reshape([n_column, -1]).T
         # 書き戻し
@@ -209,7 +206,7 @@ def update_of(x_data: np.ndarray, case_path: str, time_name: str, x_names: list)
         Xfile.content["internalField"] = p.sub("", str(fi))
         Xfile.writeFile()
         # 次の変数用に今回のデータをスライスで削除
-        x_data = x_data[n_column * len(Xc) :]
+        x_data = x_data[n_column * len(Xc):]
 
 
 def decimal_normalize(floatOrInt, digit: int = 5):
@@ -274,9 +271,7 @@ def letkf_update(
         Wa = v @ p_invsq @ v.T
         Was = v @ p_inv @ v.T
         yHxf_nzero = y0[nzero] - Hxf.mean(axis=0)[nzero]
-        xaj = xfa[j] + dxf[:, j] @ (
-            Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa
-        )
+        xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa)
 
         return xaj
 
@@ -294,9 +289,73 @@ def letkf_update(
     argset_ids = ray.put(argset)
 
     # parallel progress
-    rayget = ray.get(
-        [parallel_run.remote(xaj, j, argset_ids, bar) for j in range(dim_x)]
-    )
+    rayget = ray.get([parallel_run.remote(xaj, j, argset_ids, bar) for j in range(dim_x)])
+
+    xa = np.array(rayget)
+    return xa.T
+
+
+def letkf_update2(
+    xf: np.array,
+    Hx,
+    y0: np.array,
+    R_diag: np.array,
+    y_indexes: list,
+    num_cpus: int,
+):
+    """LETKFによりアンサンブル予報と観測値から解析値(データ同化)を計算する。
+
+    Args:
+        xf (np.array): アンサンブル予報マトリクス(アンサンブル数, 状態変数の数)
+        Hlil (lil_matrix): 観測演算マトリクス（観測点数, 状態変数の数）scipy.sparce.lil_matrix
+        y0 (np.array): 観測データ(観測点数)
+        R_diag (np.array): 観測データの分散行列の対角成分
+        y_indexes (list): 状態変数に対応する観測インデックスのリスト
+        lmat (np.array): cell間距離に応じて正規分布する影響度マトリクス
+        num_cpus (int): 並列コア数
+
+    Returns:
+        np.array: データ同化後の解析マトリクス(アンサンブル数, 状態変数の数)
+    """
+    nmem = xf.shape[0]
+    dim_x = xf.shape[1]
+    xfa = np.mean(xf, axis=0)
+    dxf = xf - xfa
+    Hxf = Hx(xf, y_indexes)
+    dyf = Hxf - Hx(xfa, y_indexes)
+    invR = np.diag(1 / R_diag)
+
+    def xaj(j, args):
+        dyf, nmem, y0, xfa, dxf, invR, Hxf = args
+        dyfj = dyf[:, :]
+        C = dyfj @ invR
+        w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + C @ dyfj.T)
+        w = np.real(w)
+        v = np.real(v)
+        p_invsq = np.diag(1 / np.sqrt(w))
+        p_inv = np.diag(1 / w)
+        Wa = v @ p_invsq @ v.T
+        Was = v @ p_inv @ v.T
+        yHxf_nzero = y0[:] - Hxf.mean(axis=0)[:]
+        xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa)
+
+        return xaj
+
+    # for single test
+    argset = [dyf, nmem, y0, xfa, dxf, invR, Hxf]
+    if num_cpus == 1:
+        xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
+        return xajTsingle
+
+    # for progress bar
+    #remote_tqdm = ray.remote(tqdm_ray.tqdm)
+    #bar = remote_tqdm.remote(total=dim_x)
+
+    # for args
+    argset_ids = ray.put(argset)
+
+    # parallel progress
+    rayget = ray.get([parallel_run.remote(xaj, j, argset_ids) for j in range(dim_x)])
 
     xa = np.array(rayget)
     return xa.T
@@ -309,6 +368,7 @@ class dummy_bar:
         self.update = self.update()
 
     class update:
+
         @classmethod
         def remote(self, args):
             pass

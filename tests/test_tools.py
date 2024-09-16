@@ -1,11 +1,9 @@
 import numpy as np
-from scipy.sparse import coo_matrix
 import ray
+from scipy.sparse import coo_matrix
 
-from foamdapy.tools import decimal_normalize
-from foamdapy.tools import letkf_update
-from foamdapy.tools import parallel_run
-from foamdapy.tools import createRdiag_from_xf
+from foamdapy.tools import (createRdiag_from_xf, decimal_normalize, letkf_update, letkf_update2,
+                            parallel_run)
 
 
 def test_createRdiag_from_xf():
@@ -27,8 +25,8 @@ def test_createRdiag_from_xf():
     n_cells = 3  # 3セル x 2変数
     obs_indexes = [0, 4]  # 1変数目:0,1,2、　2変数目:3,4,5
     res = createRdiag_from_xf(xf, n_cells, obs_indexes)
-    assert res[0] == ((x1[1] - x1[0]) * 0.01 / 2.0) ** 2
-    assert res[1] == ((x2[1] - x2[0]) * 0.01 / 2.0) ** 2
+    assert res[0] == ((x1[1] - x1[0]) * 0.01 / 2.0)**2
+    assert res[1] == ((x2[1] - x2[0]) * 0.01 / 2.0)**2
 
 
 def test_decimal_normalize():
@@ -91,4 +89,46 @@ def test_letkf_update():
     # parallel test
     num_cpu = 2
     xa2 = letkf_update(xf, Hlil, y0, R_diag, y_indexes, lmat, num_cpu)
+    assert (np.round(xa1.mean(axis=0), 9) == np.round(xa2.mean(axis=0), 9)).all()
+
+
+def test_letkf_update2():
+    np.random.seed(0)
+    num_ensenble = 40
+    num_obs = 2
+
+    xf = np.stack(
+        [
+            np.random.normal(0.0, 1, num_ensenble),
+            np.random.normal(1.0, 2, num_ensenble),
+            np.random.normal(2.0, 1, num_ensenble),
+        ],
+        axis=1,
+    )
+
+    def Hx(xf, column_slice):
+        if xf.ndim == 1:
+            return xf[column_slice]
+        return xf[:, column_slice]
+
+    t0 = xf * 2.0
+    y0 = t0[:, -num_obs:].mean(axis=0)
+    y_indexes = np.array([1, 2])
+    R_diag = np.ones(y0.size) * 0.0001
+
+    num_cpu = 1
+    xa_loop = letkf_update2(xf, Hx, y0, R_diag, y_indexes, num_cpu)
+    rmse = np.sqrt(np.mean(np.square(xa_loop[:, -2:] - y0)))
+    print(rmse)
+    xa1 = xa_loop.copy()
+    for i in range(10):
+        xa_loop = letkf_update2(xa_loop, Hx, y0, R_diag, y_indexes, num_cpu)
+        rmse = np.sqrt(np.mean(np.square(xa_loop[:, -2:] - y0)))
+        print(rmse)
+    # test of converges to observed value
+    assert (np.round(xa_loop.mean(axis=0)[-num_obs:], 3) == np.round(y0, 3)).all()
+
+    # parallel test
+    num_cpu = 2
+    xa2 = letkf_update2(xf, Hx, y0, R_diag, y_indexes, num_cpu)
     assert (np.round(xa1.mean(axis=0), 9) == np.round(xa2.mean(axis=0), 9)).all()

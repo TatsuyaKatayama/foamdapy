@@ -1,24 +1,142 @@
+import glob
+import os
+import shutil
+
 import numpy as np
 import numpy.matlib as mb
 import ray
-
+from ray.experimental import tqdm_ray
 from scipy.sparse import lil_matrix
 
-import os
-import glob
+from .foamer import OFCase
+from .tools import (cell_distance, createRdiag_from_xf, letkf_update, letkf_update2, localizemat,
+                    parallel_run)
 
 # import time
 
 
-from .tools import cell_distance
-from .tools import localizemat
-from .tools import letkf_update
-from .tools import parallel_run
-from .tools import createRdiag_from_xf
-from .foamer import OFCase
+class Ensim_base():
+
+    def __init__(
+        self,
+        ensim_dir: str,
+        prefix_sim_name: str,
+        x_names: list,
+        dim_x: int,
+        dim_ensemble: int,
+        y_names: list,
+        obs_indexes: list,
+        obs_case_dir: str,
+        num_cpus: int,
+    ):
+        self.ensim_dir = ensim_dir
+        self.prefix_sim_name = prefix_sim_name
+        self.x_names = x_names
+        self.dim_x = dim_x
+        self.dim_emsemble = dim_ensemble
+        self.dim_y = len(obs_indexes)
+        self.y_names = y_names
+        self.num_cpus = num_cpus
+
+        self.obs_case = OFCase(obs_case_dir)
+        self.y_indexes = obs_indexes
+        self.case_path_list = self.case_dirs()
+        self.n_menber = len(self.case_path_list)
+        self.cases = self.__cases__()
+        self.xa = np.empty([self.dim_emsemble, self.dim_x])
+        self.xf = np.empty([self.dim_emsemble, self.dim_x])
+        self.y0 = np.empty(len(self.y_indexes))
+        self.func_get_xfi = None
+        self.func_get_y0 = None
+        self.func_Hx = None
+        self.logdir = self.craete_log_dir()
+
+    def clearPatternInCases(self, pattern: str):
+        for case in self.cases:
+            case.clearPattern(pattern)
+
+    def __cases__(self):
+        cases = []
+        for cpath in self.case_path_list:
+            cases.append(OFCase(cpath))
+        return cases
+
+    def case_dirs(self):
+        like_dir = os.path.join(self.ensim_dir, self.prefix_sim_name) + "*"
+        return glob.glob(like_dir)
+
+    def get_xf(self, loopset, argset):
+        # for single test
+        if self.num_cpus == 1:
+            xf = np.array([self.func_get_xfi(i, argset) for i in loopset]).T
+            return xf
+
+        # for args
+        argset_ids = ray.put(argset)
+
+        # parallel progress
+        rayget = ray.get([parallel_run.remote(self.func_get_xfi, i, argset_ids) for i in loopset])
+
+        xf = np.array(rayget)
+        return xf
+
+    def craete_log_dir(self):
+        logdir = os.path.join(self.ensim_dir, "logs")
+        os.makedirs(logdir, exist_ok=True)
+        return logdir
+
+    def clear_log_dir(self):
+        logdir = self.craete_log_dir()
+        shutil.rmtree(logdir, ignore_errors=True)
+
+    def save_logs(self, suffix: str):
+        logdir = self.craete_log_dir()
+        np.save(f"{logdir}/xa_iter_{suffix}.npy", self.xa)
+        np.save(f"{logdir}/xf_iter_{suffix}.npy", self.xf)
+        np.save(f"{logdir}/y0_iter_{suffix}.npy", self.y0)
 
 
-class EnSim:
+class EnSim2(Ensim_base):
+
+    def __init__(self, ensim_dir: str, prefix_sim_name: str, x_names: list, dim_x: int,
+                 dim_ensemble: int, y_names: list, obs_indexes: list, obs_case_dir: str,
+                 num_cpus: int):
+        super().__init__(ensim_dir, prefix_sim_name, x_names, dim_x, dim_ensemble, y_names,
+                         obs_indexes, obs_case_dir, num_cpus)
+        self.mat_d = cell_distance(self.case_path_list[0])
+
+    def letkf_update(self):
+        xf = self.xf
+        Hx = self.func_Hx
+        y_indexes = self.y_indexes
+        y0 = self.y0
+        self.xa = letkf_update2(xf, Hx, y0, self.R_diag, y_indexes, self.num_cpus)
+
+    def start_ray(self, ignore_reinit_error=True):
+        ray.init(num_cpus=self.num_cpus, ignore_reinit_error=ignore_reinit_error)
+
+    def shutdown_ray(self):
+        ray.shutdown()
+
+    def ensemble_forcast(self, time_name):
+
+        def forcast(case, args):
+            time_name = args
+            case.forcast(f"{time_name}")
+            return
+
+        args = time_name
+        if self.num_cpus == 1:
+            for i, case in enumerate(self.cases):
+                forcast(case, args)
+            return
+
+        args_ids = ray.put(args)
+        ray.get([parallel_run.remote(forcast, case, args_ids) for case in self.cases])
+
+
+class EnSim(Ensim_base):
+
     def __init__(
         self,
         ensim_dir: str,
@@ -71,16 +189,6 @@ class EnSim:
         Hlil[np.arange(0, self.y0.size, 1), self.y_indexes] = np.ones(self.y0.shape)
         return Hlil
 
-    def case_dirs(self):
-        like_dir = os.path.join(self.ensim_dir, self.prefix_sim_name) + "*"
-        return glob.glob(like_dir)
-
-    def __cases__(self):
-        cases = []
-        for cpath in self.case_path_list:
-            cases.append(OFCase(cpath))
-        return cases
-
     def bkup_time_dir(self, time_name: str, to_time_name: str):
         for i, case in enumerate(self.cases):
             case.copyTimeDir(time_name, to_time_name)
@@ -90,6 +198,7 @@ class EnSim:
             case.removeTimeDir(time_name)
 
     def update_cases(self, time_name):
+
         def writeVal(args0, args1):
             i, case = args0
             xa, time_name, x_names = args1
@@ -103,14 +212,12 @@ class EnSim:
             return
 
         args_ids = ray.put(args1)
-        ray.get(
-            [
-                parallel_run.remote(writeVal, [i, case], args_ids)
-                for i, case in enumerate(self.cases)
-            ]
-        )
+        ray.get([
+            parallel_run.remote(writeVal, [i, case], args_ids) for i, case in enumerate(self.cases)
+        ])
 
     def ensemble_forcast(self, time_name):
+
         def forcast(case, args):
             time_name, x_names = args
             case.forcast(f"{time_name}")
@@ -123,14 +230,8 @@ class EnSim:
             return
 
         args_ids = ray.put(args)
-        ray_get = ray.get(
-            [parallel_run.remote(forcast, case, args_ids) for case in self.cases]
-        )
+        ray_get = ray.get([parallel_run.remote(forcast, case, args_ids) for case in self.cases])
         self.xf = np.array(ray_get)
-
-    def clearPatternInCases(self, pattern: str):
-        for case in self.cases:
-            case.clearPattern(pattern)
 
     def observation(self, time_name):
         case = self.obs_case
@@ -154,6 +255,7 @@ class EnSim:
         xa_alpha[xa_alpha > max_val] = max_val
 
     def set_xf(self, time_name: str):
+
         def getVal(case: OFCase, args):
             time_name, x_names = args
             xfi = case.getValues(time_name, x_names)
@@ -165,9 +267,7 @@ class EnSim:
             return
 
         args_ids = ray.put([time_name, self.x_names])
-        ray_get = ray.get(
-            [parallel_run.remote(getVal, case, args_ids) for case in self.cases]
-        )
+        ray_get = ray.get([parallel_run.remote(getVal, case, args_ids) for case in self.cases])
         self.xf = np.array(ray_get)
 
     def start_ray(self, ignore_reinit_error=True):
