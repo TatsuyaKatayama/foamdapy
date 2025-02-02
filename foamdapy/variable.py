@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from typing import Dict, List, Optional, Tuple, Union
@@ -21,6 +22,15 @@ class ColumnInfo:
         self.time_name = time_name  # 時間ディレクトリの名前
         self.indices = indices  # 列のインデックス（リストまたはスライス）
         self.cells = cells  # セル指定あれば
+
+    def str_dump(self):
+        dic = {
+            "name": self.name,
+            "time_name": self.time_name,
+            "indices": str(self.indices),
+            "cells": self.cells.tolist() if self.cells is not None else None
+        }
+        return json.dumps(dic)
 
 
 class esarray(np.ndarray):

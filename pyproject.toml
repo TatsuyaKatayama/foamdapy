@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-numpy = "^1.26.4"
+numpy = ">=1.26.4"
 matplotlib = "^3.8.3"
 tqdm = "^4.66.2"
 pyfoam = "^2023.7"

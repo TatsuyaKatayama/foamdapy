@@ -9,33 +9,31 @@ from ray.experimental import tqdm_ray
 from scipy.sparse import lil_matrix
 
 from .foamer import OFCase
-from .tools import (cell_distance, createRdiag_from_xf, letkf_update, letkf_update2, localizemat,
-                    parallel_run)
+from .tools import (cell_distance, createRdiag_from_xf, letkf_update, letkf_update2, letkf_update3,
+                    localizemat, parallel_run)
 
 # import time
 
 
 class Ensim_base():
 
-    def __init__(
-        self,
-        ensim_dir: str,
-        prefix_sim_name: str,
-        x_names: list,
-        dim_x: int,
-        dim_ensemble: int,
-        y_names: list,
-        obs_indexes: list,
-        obs_case_dir: str,
-        num_cpus: int,
-    ):
+    def __init__(self,
+                 ensim_dir: str,
+                 prefix_sim_name: str,
+                 x_names: list,
+                 dim_x: int,
+                 dim_ensemble: int,
+                 obs_indexes: list,
+                 obs_case_dir: str,
+                 num_cpus: int,
+                 localize: bool = False,
+                 localize_distance: float = 0.1):
         self.ensim_dir = ensim_dir
         self.prefix_sim_name = prefix_sim_name
         self.x_names = x_names
         self.dim_x = dim_x
         self.dim_emsemble = dim_ensemble
         self.dim_y = len(obs_indexes)
-        self.y_names = y_names
         self.num_cpus = num_cpus
 
         self.obs_case = OFCase(obs_case_dir)
@@ -46,10 +44,17 @@ class Ensim_base():
         self.xa = np.empty([self.dim_emsemble, self.dim_x])
         self.xf = np.empty([self.dim_emsemble, self.dim_x])
         self.y0 = np.empty(len(self.y_indexes))
+        self.R_diag = np.empty(len(self.y_indexes))
         self.func_get_xfi = None
         self.func_get_y0 = None
         self.func_Hx = None
         self.logdir = self.craete_log_dir()
+
+        self.localize = localize
+        if self.localize:
+            print(f"localize is {self.localize}.")
+            self.mat_d = cell_distance(self.case_path_list[0])
+            self.localize_distance = localize_distance
 
     def clearPatternInCases(self, pattern: str):
         for case in self.cases:
@@ -95,28 +100,39 @@ class Ensim_base():
         np.save(f"{logdir}/xf_iter_{suffix}.npy", self.xf)
         np.save(f"{logdir}/y0_iter_{suffix}.npy", self.y0)
 
-
-class EnSim2(Ensim_base):
-
-    def __init__(self, ensim_dir: str, prefix_sim_name: str, x_names: list, dim_x: int,
-                 dim_ensemble: int, y_names: list, obs_indexes: list, obs_case_dir: str,
-                 num_cpus: int):
-        super().__init__(ensim_dir, prefix_sim_name, x_names, dim_x, dim_ensemble, y_names,
-                         obs_indexes, obs_case_dir, num_cpus)
-        self.mat_d = cell_distance(self.case_path_list[0])
-
     def letkf_update(self):
         xf = self.xf
         Hx = self.func_Hx
         y_indexes = self.y_indexes
         y0 = self.y0
-        self.xa = letkf_update2(xf, Hx, y0, self.R_diag, y_indexes, self.num_cpus)
+        if self.localize:
+            self.xa = letkf_update3(xf, Hx, y0, self.R_diag, self.mat_d, y_indexes, self.num_cpus,
+                                    self.localize_distance)
+        else:
+            self.xa = letkf_update2(xf, Hx, y0, self.R_diag, y_indexes, self.num_cpus)
 
     def start_ray(self, ignore_reinit_error=True):
         ray.init(num_cpus=self.num_cpus, ignore_reinit_error=ignore_reinit_error)
 
     def shutdown_ray(self):
         ray.shutdown()
+
+
+class EnSim2(Ensim_base):
+
+    def __init__(self,
+                 ensim_dir: str,
+                 prefix_sim_name: str,
+                 x_names: list,
+                 dim_x: int,
+                 dim_ensemble: int,
+                 obs_indexes: list,
+                 obs_case_dir: str,
+                 num_cpus: int,
+                 localize: bool = False,
+                 localize_distance: float = 0.05):
+        super().__init__(ensim_dir, prefix_sim_name, x_names, dim_x, dim_ensemble, obs_indexes,
+                         obs_case_dir, num_cpus, localize, localize_distance)
 
     def ensemble_forcast(self, time_name):
 
@@ -269,9 +285,3 @@ class EnSim(Ensim_base):
         args_ids = ray.put([time_name, self.x_names])
         ray_get = ray.get([parallel_run.remote(getVal, case, args_ids) for case in self.cases])
         self.xf = np.array(ray_get)
-
-    def start_ray(self, ignore_reinit_error=True):
-        ray.init(num_cpus=self.num_cpus, ignore_reinit_error=ignore_reinit_error)
-
-    def shutdown_ray(self):
-        ray.shutdown()

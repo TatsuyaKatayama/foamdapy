@@ -3,7 +3,7 @@ import ray
 from scipy.sparse import coo_matrix
 
 from foamdapy.tools import (createRdiag_from_xf, decimal_normalize, letkf_update, letkf_update2,
-                            parallel_run)
+                            letkf_update3, parallel_run, var_obs_distance)
 
 
 def test_createRdiag_from_xf():
@@ -132,3 +132,65 @@ def test_letkf_update2():
     num_cpu = 2
     xa2 = letkf_update2(xf, Hx, y0, R_diag, y_indexes, num_cpu)
     assert (np.round(xa1.mean(axis=0), 9) == np.round(xa2.mean(axis=0), 9)).all()
+
+
+def test_letkf_update3():
+    np.random.seed(0)
+    num_ensenble = 40
+
+    xf = np.stack(
+        [
+            np.random.normal(0.0, 1, num_ensenble),
+            np.random.normal(1.0, 2, num_ensenble),
+            np.random.normal(2.0, 1, num_ensenble),
+        ],
+        axis=1,
+    )
+
+    def Hx(xf, column_slice):
+        if xf.ndim == 1:
+            return xf[column_slice]
+        return xf[:, column_slice]
+
+    mat_d = np.array([[0, 0.2, 0.6], [0.2, 0, 0.4], [0.6, 0.4, 0]])
+
+    t0 = xf * 2.0
+    y_indexes = np.array([0, 2])
+    y0 = t0[:, y_indexes].mean(axis=0)
+    R_diag = np.ones(y0.size) * 0.0001
+    vod_mat = var_obs_distance([0, 1, 2], y_indexes, mat_d)
+
+    num_cpu = 1
+    xa_loop = letkf_update3(xf, Hx, y0, R_diag, vod_mat, y_indexes, num_cpu, 0.5)
+    xa1 = xa_loop.copy()
+    for i in range(10):
+        xa_loop = letkf_update3(xa_loop, Hx, y0, R_diag, vod_mat, y_indexes, num_cpu, 0.5)
+
+    # test of converges to observed value
+    assert (np.round(xa_loop.mean(axis=0)[y_indexes], 3) == np.round(y0, 3)).all()
+
+    # parallel test
+    num_cpu = 2
+    xa2 = letkf_update3(xf, Hx, y0, R_diag, vod_mat, y_indexes, num_cpu, 0.5)
+    assert (np.round(xa1.mean(axis=0), 9) == np.round(xa2.mean(axis=0), 9)).all()
+
+
+def test_var_obs_distance():
+    mat_d = np.array([[0, 0.2, 0.6], [0.2, 0, 0.4], [0.6, 0.4, 0]])
+    vod_mat = var_obs_distance([0, 1, 2], [1, 2], mat_d)
+    assert vod_mat.shape == (2, 3)
+    assert vod_mat[0, 0] == 0.2
+    assert vod_mat[0, 1] == 0
+    assert vod_mat[0, 2] == 0.4
+    assert vod_mat[1, 0] == 0.6
+    assert vod_mat[1, 1] == 0.4
+    assert vod_mat[1, 2] == 0
+
+    vod_mat = var_obs_distance([1, 1, 2], [2, 1], mat_d)
+    assert vod_mat.shape == (2, 3)
+    assert vod_mat[0, 0] == 0.4
+    assert vod_mat[0, 1] == 0.4
+    assert vod_mat[0, 2] == 0
+    assert vod_mat[1, 0] == 0
+    assert vod_mat[1, 1] == 0
+    assert vod_mat[1, 2] == 0.4

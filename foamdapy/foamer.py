@@ -1,17 +1,18 @@
-import shutil
-import shlex
-import numpy as np
 import os
+import shlex
+import shutil
+import subprocess
 
-from PyFoam.RunDictionary.SolutionDirectory import SolutionDirectory
-from PyFoam.RunDictionary.ParsedParameterFile import ParsedParameterFile
+import numpy as np
 from PyFoam.Execution.BasicRunner import BasicRunner
+from PyFoam.RunDictionary.ParsedParameterFile import ParsedParameterFile
+from PyFoam.RunDictionary.SolutionDirectory import SolutionDirectory
 
-from .tools import extract_val
-from .tools import update_of
+from .tools import extract_val, update_of
 
 
 class OFCase:
+
     def __init__(self, case_dir):
         self.case_dir = case_dir
 
@@ -51,9 +52,7 @@ class OFCase:
         self.clearLogs()
 
         # controlDictの編集
-        controlDict = ParsedParameterFile(
-            os.path.join(self.case_dir, "system/controlDict")
-        )
+        controlDict = ParsedParameterFile(os.path.join(self.case_dir, "system/controlDict"))
         controlDict.content["startTime"] = 0
         controlDict.content["startFrom"] = "latestTime"
         controlDict.content["endTime"] = end_time
@@ -70,6 +69,12 @@ class OFCase:
         # xxFoamの実行。実行結果情報を返す
         foamState = foamRunner.start()
         return foamState
+
+    def Allrun(self, cmd: str = None):
+        try:
+            subprocess.run([f"{self.case_dir}/Allrun"], check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error: {e}")
 
     def exec_ofcmd(self, ofcmd: str = None):
         # 空なら実行しない
