@@ -46,6 +46,23 @@ def extract_val(case_path: str, time_name: str, x_names: list, cells: list = Non
     return Xi.T[0]
 
 
+def var_obs_distance(cells_in_var: list, cells_in_obs: list, cell_distance: np.array):
+    """各変数間の距離を返す関数
+
+    Args:
+        cells_in_var (list): 状態変数に含まれるcellインデックス(np.array)のリスト
+        cells_in_obs (list): 観測変数に含まれるcellインデックス(np.array)のリスト
+        cell_distance (np.array): 各セル間の距離を表すマトリクス
+
+    Returns:
+        np.array: 観測変数ｘ状態変数の距離行列
+    """
+    obs_indices = np.array(cells_in_obs)
+    var_indices = np.array(cells_in_var)
+    rtn = cell_distance[np.ix_(obs_indices, var_indices)]
+    return rtn
+
+
 def cell_distance(case_path: str):
     """各セル間の距離を表すマトリクス
 
@@ -68,7 +85,31 @@ def cell_distance(case_path: str):
     return mat_d
 
 
-def localizemat(cell_distance: np.array, lim=0.1):
+def invR_nzero(j: int, R: np.array, var_obs_distance: np.array, lim=0.1, sigma=None):
+    """localize後のinvRとnzero_vecを返す
+
+    Args:
+        j (int): 状態変数jについて
+        R (np.array): 観測誤差行列の対角成分
+        var_obs_distance (np.array): 観測変数ｘ状態変数の距離行列
+        lim (float, optional): これより遠い距離は計算しないよ. Defaults to 0.1.
+        sigma (_type_, optional): 影響度の分散. Defaults to None.
+
+    Returns:
+        taple: invR: idx番のcellに対する観測誤差の共分散行列Rの逆行列(観測indexes数,観測indexes数)
+               indx_nozero: 影響度0でないかのboolean行列 ex) (True, False, True...)
+    """
+
+    var2obs = var_obs_distance[:, j]
+    eff_distance_vec = np.exp(-var2obs * var2obs / 2 / sigma**2)
+    nzero_vec = np.where(var2obs < lim, True, False)
+
+    invR_diag = 1 / R[nzero_vec] * eff_distance_vec[nzero_vec]
+    invR = np.diag(invR_diag)
+    return invR, nzero_vec
+
+
+def localizemat(cell_distance: np.array, lim=0.1, sigma=None):
     """cell間距離に応じて正規分布する影響度。lim以下は影響度0とみなす。
     sigmaの大きさは最大距離の1/10にしてる(仮)。
     将来的にはgaspari&cohn関数がいいはず
@@ -81,7 +122,8 @@ def localizemat(cell_distance: np.array, lim=0.1):
         np.array: lim～1の影響度マトリクス(cell数,cell数)を返す
     """
     mat_d = cell_distance
-    sigma = mat_d.max() / 10
+    if sigma is None:
+        sigma = mat_d.max() / 10
     localizemat = np.exp(-mat_d * mat_d / (2 * sigma**2))
     localizemat[localizemat < lim] = 0.0
     return localizemat
@@ -282,14 +324,14 @@ def letkf_update(
         return xajTsingle
 
     # for progress bar
-    remote_tqdm = ray.remote(tqdm_ray.tqdm)
-    bar = remote_tqdm.remote(total=dim_x)
+    #remote_tqdm = ray.remote(tqdm_ray.tqdm)
+    #bar = remote_tqdm.remote(total=dim_x)
 
     # for args
     argset_ids = ray.put(argset)
 
     # parallel progress
-    rayget = ray.get([parallel_run.remote(xaj, j, argset_ids, bar) for j in range(dim_x)])
+    rayget = ray.get([parallel_run.remote(xaj, j, argset_ids) for j in range(dim_x)])
 
     xa = np.array(rayget)
     return xa.T
@@ -302,6 +344,7 @@ def letkf_update2(
     R_diag: np.array,
     y_indexes: list,
     num_cpus: int,
+    lmat: np.array = None,
 ):
     """LETKFによりアンサンブル予報と観測値から解析値(データ同化)を計算する。
 
@@ -323,11 +366,114 @@ def letkf_update2(
     dxf = xf - xfa
     Hxf = Hx(xf, y_indexes)
     dyf = Hxf - Hx(xfa, y_indexes)
-    invR = np.diag(1 / R_diag)
+
+    if lmat is None:
+
+        def xaj(j, args):
+            dyf, nmem, y0, xfa, dxf, invR, Hxf = args
+            dyfj = dyf[:, :]
+            C = dyfj @ invR
+            w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + C @ dyfj.T)
+            w = np.real(w)
+            v = np.real(v)
+            p_invsq = np.diag(1 / np.sqrt(w))
+            p_inv = np.diag(1 / w)
+            Wa = v @ p_invsq @ v.T
+            Was = v @ p_inv @ v.T
+            yHxf_nzero = y0[:] - Hxf.mean(axis=0)[:]
+            xaj = xfa[j] + dxf[:,
+                               j] @ (Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa)
+
+            return xaj
+
+        invR = np.diag(1 / R_diag)
+        # for single test
+        argset = [dyf, nmem, y0, xfa, dxf, invR, Hxf]
+        if num_cpus == 1:
+            xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
+            return xajTsingle
+
+        # parallel progress
+        argset_ids = ray.put(argset)
+        rayget = ray.get([parallel_run.remote(xaj, j, argset_ids) for j in range(dim_x)])
+        xa = np.array(rayget)
+        return xa.T
+
+    else:
+
+        def xaj(j, args):
+            y_indexes, dyf, nmem, y0, xfa, dxf, lmat, Hxf = args
+            invR, nzero = invR_nonZero(R_diag, lmat, j, y_indexes)
+            dyfj = dyf[:, nzero]
+            C = dyfj @ invR
+            w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + C @ dyfj.T)
+            w = np.real(w)
+            v = np.real(v)
+            p_invsq = np.diag(1 / np.sqrt(w))
+            p_inv = np.diag(1 / w)
+            Wa = v @ p_invsq @ v.T
+            Was = v @ p_inv @ v.T
+            yHxf_nzero = y0[nzero] - Hxf.mean(axis=0)[nzero]
+            xaj = xfa[j] + dxf[:,
+                               j] @ (Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa)
+
+            return xaj
+
+        # for single test
+        argset = [y_indexes, dyf, nmem, y0, xfa, dxf, lmat, Hxf]
+        if num_cpus == 1:
+            xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
+            return xajTsingle
+
+        # parallel progress
+        argset_ids = ray.put(argset)
+        rayget = ray.get([parallel_run.remote(xaj, j, argset_ids) for j in range(dim_x)])
+        xa = np.array(rayget)
+        return xa.T
+
+
+def letkf_update3(
+    xf: np.array,
+    Hx,
+    y0: np.array,
+    R_diag: np.array,
+    vod_mat: np.array,
+    y_indexes: list,
+    num_cpus: int,
+    localizeLimit: float,
+    localizeSigma: float = None,
+):
+    """LETKFによりアンサンブル予報と観測値から解析値(データ同化)を計算する。
+    Args:
+        xf (np.array): アンサンブル予報マトリクス(アンサンブル数, 状態変数の数)
+        Hx (function): xを引数に取り、観測演算マトリクスを返す関数
+        y0 (np.array): 観測データ(観測点数)
+        R_diag (np.array): 観測データの分散行列の対角成分
+        vod_mat (np.array): 観測変数ｘ状態変数の距離行列
+        y_indexes (list): 状態変数に対応する観測インデックスのリスト
+        num_cpus (int): 並列コア数
+        localizeLimit (float): もうここまで遠いと影響ないよって距離
+        localizeSigma (float): 影響度の与える距離の分散。default=None:localizeLimit*0.5
+    Returns:
+        np.array: データ同化後の解析マトリクス(アンサンブル数, 状態変数の数)
+    """
+
+    nmem = xf.shape[0]
+    dim_x = xf.shape[1]
+    xfa = np.mean(xf, axis=0)
+    dxf = xf - xfa
+    Hxf = Hx(xf, y_indexes)
+    dyf = Hxf - Hx(xfa, y_indexes)
+
+    R_diag = R_diag
+    localizeLimit = localizeLimit
+    if localizeSigma is None:
+        localizeSigma = localizeLimit * 0.5
 
     def xaj(j, args):
-        dyf, nmem, y0, xfa, dxf, invR, Hxf = args
-        dyfj = dyf[:, :]
+        dyf, nmem, y0, xfa, dxf, Hxf, vod_mat, R_diag, localizeLimit, localizeSigma = args
+        invR, nzero = invR_nzero(j, R_diag, vod_mat, localizeLimit, localizeSigma)
+        dyfj = dyf[:, nzero]
         C = dyfj @ invR
         w, v = np.linalg.eig(np.identity(nmem) * (nmem - 1) + C @ dyfj.T)
         w = np.real(w)
@@ -336,13 +482,13 @@ def letkf_update2(
         p_inv = np.diag(1 / w)
         Wa = v @ p_invsq @ v.T
         Was = v @ p_inv @ v.T
-        yHxf_nzero = y0[:] - Hxf.mean(axis=0)[:]
+        yHxf_nzero = y0[nzero] - Hxf.mean(axis=0)[nzero]
         xaj = xfa[j] + dxf[:, j] @ (Was @ C @ yHxf_nzero.reshape(-1, 1) + np.sqrt(nmem - 1) * Wa)
 
         return xaj
 
     # for single test
-    argset = [dyf, nmem, y0, xfa, dxf, invR, Hxf]
+    argset = [dyf, nmem, y0, xfa, dxf, Hxf, vod_mat, R_diag, localizeLimit, localizeSigma]
     if num_cpus == 1:
         xajTsingle = np.array([xaj(j, argset) for j in trange(dim_x)]).T
         return xajTsingle
